@@ -49,8 +49,19 @@ AAsset *AAssetManager_open(FakeAssetManager *amgr, const char *filename, int mod
 #endif
 
     std::string content;
-    if(!FileUtil::readFile(fullPath, content))
-        return nullptr;
+    if(!FileUtil::readFile(fullPath, content)) {
+        const char *prefix = "assets/";
+        if (strncmp(filename, prefix, strlen(prefix)) == 0) {
+            std::string alt = amgr->rootDir + (filename + strlen(prefix));
+            if (FileUtil::readFile(alt, content)) {
+                fullPath = std::move(alt);
+            } else {
+                return nullptr;
+            }
+        } else {
+            return nullptr;
+        }
+    }
 
     auto ret = new AAsset;
     ret->buffer = content;
@@ -78,8 +89,15 @@ AAssetDir *AAssetManager_openDir(FakeAssetManager *amgr, const char *dirname) {
 #endif
 
     DIR *d = opendir(fullPath.c_str());
-    if(!d)
-        return nullptr;
+    if(!d) {
+        const char *prefix = "assets/";
+        if (strncmp(dirname, prefix, strlen(prefix)) == 0) {
+            fullPath = amgr->rootDir + (dirname + strlen(prefix));
+            d = opendir(fullPath.c_str());
+        }
+        if(!d)
+            return nullptr;
+    }
 
     auto ret = new AAssetDir;
     ret->dir = d;
