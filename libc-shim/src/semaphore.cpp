@@ -101,5 +101,6 @@ void shim::add_sem_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
         {"sem_wait", &detail::arg_rewrite_helper<int (::sem_t *)>::rewrite<sem_wait>},
         {"sem_timedwait", &detail::arg_rewrite_helper<int (::sem_t *, const struct timespec *)>::rewrite<sem_timedwait>},
         {"sem_post", &detail::arg_rewrite_helper<int (::sem_t *)>::rewrite<sem_post>},
+        {"sem_trywait", &detail::arg_rewrite_helper<int (::sem_t *)>::rewrite<sem_trywait>},
     });
 }

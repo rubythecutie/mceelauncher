@@ -101,18 +101,39 @@ int shim::utimensat(int dirfd, const char *pathname, const struct timespec times
     return ::utimensat(dirfd, pathname, times, flags);
 }
 
+#if !defined(__APPLE__) && !defined(__FreeBSD__)
+int shim::fstatat(int dirfd, const char *path, bionic::stat *s, int flags) {
+    struct ::stat64 tmp = {};
+    int ret = ::fstatat64(dirfd, iorewrite0(path).data(), &tmp, flags);
+    if (ret == 0)
+        bionic::from_host(tmp, *s);
+    return ret;
+}
+#else
+int shim::fstatat(int dirfd, const char *path, bionic::stat *s, int flags) {
+    struct ::stat tmp = {};
+    int ret = ::fstatat(dirfd, iorewrite0(path).data(), &tmp, flags);
+    if (ret == 0)
+        bionic::from_host(tmp, *s);
+    return ret;
+}
+#endif
+
 void shim::add_stat_shimmed_symbols(std::vector<shimmed_symbol> &list) {
     list.insert(list.end(), {
         {"stat", WithErrnoUpdate(IOREWRITE1(stat))},
         {"fstat", WithErrnoUpdate(fstat)},
         {"stat64", WithErrnoUpdate(IOREWRITE1(stat))},
         {"fstat64", WithErrnoUpdate(fstat)},
+        {"fstatat", WithErrnoUpdate(fstatat)},
+        {"fstatat64", WithErrnoUpdate(fstatat)},
         {"chmod", WithErrnoUpdate(IOREWRITE1(::chmod))},
         {"fchmod", WithErrnoUpdate(::fchmod)},
         {"fchmodat", WithErrnoUpdate(::fchmodat)},
         {"umask", WithErrnoUpdate(::umask)},
         {"mkdir", WithErrnoUpdate(IOREWRITE1(::mkdir))},
         {"utimensat", WithErrnoUpdate(utimensat)},
+        {"futimens", WithErrnoUpdate(::futimens)},
         {"lstat", WithErrnoUpdate(IOREWRITE1(lstat))},
     });
 }

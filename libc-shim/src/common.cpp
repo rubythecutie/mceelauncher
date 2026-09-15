@@ -12,6 +12,7 @@
 #include "errno.h"
 #include "ctype_data.h"
 #include "stat.h"
+#include "statvfs.h"
 #include "file_misc.h"
 #include "sysconf.h"
 #include "system_properties.h"
@@ -70,6 +71,13 @@
 #include <sys/sendfile.h>
 #include <fcntl.h>
 #endif
+#include <grp.h>
+#include <pwd.h>
+#include <termios.h>
+#include <sys/times.h>
+#include <wchar.h>
+#include <semaphore.h>
+#include <sys/statvfs.h>
 #include "fakesyscall.h"
 #include "iorewrite.h"
 #include "armhfrewrite.h"
@@ -505,6 +513,132 @@ uint32_t shim::arc4random() {
     return u;
 }
 
+// Host environ for Android 'environ' symbol (libpython3.8 etc.)
+// bionic declares `extern char** environ;`, same layout as glibc.
+extern char **environ;
+
+int shim___libc_current_sigrtmin() {
+    return SIGRTMIN;
+}
+
+int shim___libc_current_sigrtmax() {
+    return SIGRTMAX;
+}
+
+void* shim___sched_cpualloc(size_t count) {
+    return malloc(CPU_ALLOC_SIZE(count));
+}
+
+void shim___sched_cpufree(void* set) {
+    free(set);
+}
+
+int shim___sched_cpucount(size_t setsize, const void* set) {
+    const unsigned long* bits = (const unsigned long*)set;
+    size_t n = setsize / sizeof(unsigned long);
+    int count = 0;
+    for (size_t i = 0; i < n; i++)
+        count += __builtin_popcountl(bits[i]);
+    return count;
+}
+
+int shim_fstatat(int dirfd, const char *path, bionic::stat *s, int flags) {
+    struct ::stat64 tmp = {};
+    int ret = ::fstatat64(dirfd, iorewrite0(path).data(), &tmp, flags);
+    if (ret == 0)
+        bionic::from_host(tmp, *s);
+    else
+        bionic::update_errno();
+    return ret;
+}
+
+int shim_fstatvfs(int fd, struct vfs *buf) {
+    struct ::statvfs tmp = {};
+    int ret = ::fstatvfs(fd, &tmp);
+    if (ret == 0) {
+        buf->f_bsize = tmp.f_bsize;
+        buf->f_frsize = tmp.f_frsize;
+        buf->f_blocks = tmp.f_blocks;
+        buf->f_bfree = tmp.f_bfree;
+        buf->f_bavail = tmp.f_bavail;
+        buf->f_files = tmp.f_files;
+        buf->f_ffree = tmp.f_ffree;
+        buf->f_favail = tmp.f_favail;
+        buf->f_fsid = tmp.f_fsid;
+        buf->f_flag = tmp.f_flag;
+        buf->f_namemax = tmp.f_namemax;
+    }
+    return ret;
+}
+
+int shim_fstatvfs64(int fd, struct vfs *buf) {
+    return shim_fstatvfs(fd, buf);
+}
+
+int shim_setrlimit(bionic::rlimit_resource res, bionic::rlimit *info) {
+    ::rlimit hinfo {};
+    hinfo.rlim_cur = info->rlim_cur;
+    hinfo.rlim_max = info->rlim_max;
+    int ret = ::setrlimit(bionic::to_host_rlimit_resource(res), &hinfo);
+    bionic::update_errno();
+    return ret;
+}
+
+// *at wrappers with filesystem rewrite
+static int shim_fchownat(int dirfd, const char *path, uid_t owner, gid_t group, int flags) {
+    int ret = ::fchownat(dirfd, iorewrite0(path).data(), owner, group, flags);
+    bionic::update_errno();
+    return ret;
+}
+
+static int shim_linkat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, int flags) {
+    int ret = ::linkat(olddirfd, iorewrite0(oldpath).data(), newdirfd, iorewrite0(newpath).data(), flags);
+    bionic::update_errno();
+    return ret;
+}
+
+static int shim_symlinkat(const char *oldpath, int newdirfd, const char *newpath) {
+    int ret = ::symlinkat(iorewrite0(oldpath).data(), newdirfd, iorewrite0(newpath).data());
+    bionic::update_errno();
+    return ret;
+}
+
+static ssize_t shim_readlinkat(int dirfd, const char *path, char *buf, size_t bufsiz) {
+    ssize_t ret = ::readlinkat(dirfd, iorewrite0(path).data(), buf, bufsiz);
+    bionic::update_errno();
+    return ret;
+}
+
+static int shim_renameat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath) {
+    int ret = ::renameat(olddirfd, iorewrite0(oldpath).data(), newdirfd, iorewrite0(newpath).data());
+    bionic::update_errno();
+    return ret;
+}
+
+static int shim_mkdirat(int dirfd, const char *path, mode_t mode) {
+    int ret = ::mkdirat(dirfd, iorewrite0(path).data(), mode);
+    bionic::update_errno();
+    return ret;
+}
+
+static int shim_mknodat(int dirfd, const char *path, mode_t mode, dev_t dev) {
+    int ret = ::mknodat(dirfd, iorewrite0(path).data(), mode, dev);
+    bionic::update_errno();
+    return ret;
+}
+
+static int shim_mkfifo(const char *path, mode_t mode) {
+    int ret = ::mkfifo(iorewrite0(path).data(), mode);
+    bionic::update_errno();
+    return ret;
+}
+
+static int shim_mknod(const char *path, mode_t mode, dev_t dev) {
+    int ret = ::mknod(iorewrite0(path).data(), mode, dev);
+    bionic::update_errno();
+    return ret;
+}
+
 void shim::add_common_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
     list.insert(list.end(), {
         {"__errno", bionic::get_errno},
@@ -592,7 +726,16 @@ void shim::add_stdlib_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
         {"wctomb", wctomb},
         {"mbstowcs", mbstowcs},
         {"wcstombs", wcstombs},
-        {"wcsrtombs", wcsrtombs}
+        {"wcsrtombs", wcsrtombs},
+
+        {"environ", &environ},
+        {"ptsname", ::ptsname},
+        {"grantpt", ::grantpt},
+        {"unlockpt", ::unlockpt},
+        {"mkstemp", WithErrnoUpdate(::mkstemp)},
+        {"mkstemps", WithErrnoUpdate(::mkstemps)},
+        {"mkdtemp", WithErrnoUpdate(::mkdtemp)},
+        {"mktemp", WithErrnoUpdate(::mktemp)}
     });
 }
 
@@ -675,6 +818,8 @@ void shim::add_time_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
     list.insert(list.end(), {
         /* sys/time.h */
         {"gettimeofday", gettimeofday},
+        {"getitimer", ::getitimer},
+        {"setitimer", ::setitimer},
 
         /* time.h */
         {"clock", ::clock},
@@ -713,6 +858,9 @@ void shim::add_time_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
 void shim::add_wait_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
     list.insert(list.end(), {
         {"waitpid", ::waitpid},
+        {"wait", ::wait},
+        {"wait4", ::wait4},
+        {"waitid", ::waitid},
     });
 }
 
@@ -721,6 +869,12 @@ void shim::add_sched_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
         {"sched_yield", ::sched_yield},
         {"sched_setaffinity", sched_setaffinity},
         {"sched_getaffinity", sched_getaffinity},
+        {"sched_getparam", ::sched_getparam},
+        {"sched_setparam", ::sched_setparam},
+        {"sched_rr_get_interval", ::sched_rr_get_interval},
+        {"__sched_cpualloc", shim___sched_cpualloc},
+        {"__sched_cpufree", shim___sched_cpufree},
+        {"__sched_cpucount", shim___sched_cpucount},
     });
 }
 
@@ -764,7 +918,9 @@ void shim::add_unistd_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
         {"getcwd", WithErrnoUpdate(::getcwd)},
         {"dup", WithErrnoUpdate(::dup)},
         {"dup2", WithErrnoUpdate(::dup2)},
+        {"dup3", WithErrnoUpdate(::dup3)},
         {"execv", WithErrnoUpdate(::execv)},
+        {"execve", WithErrnoUpdate(::execve)},
         {"execle", ::execle},
         {"execl", ::execl},
         {"execvp", ::execvp},
@@ -777,17 +933,39 @@ void shim::add_unistd_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
         {"getgid", WithErrnoUpdate(::getgid)},
         {"getppid", WithErrnoUpdate(::getppid)},
         {"getpgrp", WithErrnoUpdate(::getpgrp)},
+        {"getpgid", WithErrnoUpdate(::getpgid)},
+        {"getsid", WithErrnoUpdate(::getsid)},
+        {"setpgid", WithErrnoUpdate(::setpgid)},
+        {"setpgrp", WithErrnoUpdate(::setpgrp)},
+        {"setsid", WithErrnoUpdate(::setsid)},
         {"geteuid", WithErrnoUpdate(::geteuid)},
         {"getegid", WithErrnoUpdate(::getegid)},
+        {"getgroups", WithErrnoUpdate(::getgroups)},
+        {"getgrouplist", WithErrnoUpdate(::getgrouplist)},
+        {"getlogin", ::getlogin},
         {"fork", WithErrnoUpdate(::fork)},
         {"vfork", WithErrnoUpdate(::vfork)},
         {"isatty", WithErrnoUpdate(::isatty)},
         {"link", WithErrnoUpdate(IOREWRITE2(::link))},
+        {"linkat", WithErrnoUpdate(shim_linkat)},
         {"symlink", WithErrnoUpdate(IOREWRITE2(::symlink))},
+        {"symlinkat", WithErrnoUpdate(shim_symlinkat)},
         {"readlink", WithErrnoUpdate(::readlink)},
+        {"readlinkat", WithErrnoUpdate(shim_readlinkat)},
+        {"readv", WithErrnoUpdate(::readv)},
         {"unlink", WithErrnoUpdate(IOREWRITE1(::unlink))},
         {"unlinkat", unlinkat},
         {"rmdir", WithErrnoUpdate(IOREWRITE1(::rmdir))},
+        {"renameat", WithErrnoUpdate(shim_renameat)},
+        {"mkdirat", WithErrnoUpdate(shim_mkdirat)},
+        {"mknodat", WithErrnoUpdate(shim_mknodat)},
+        {"mkfifo", WithErrnoUpdate(shim_mkfifo)},
+        {"mknod", WithErrnoUpdate(shim_mknod)},
+        {"fchownat", WithErrnoUpdate(shim_fchownat)},
+        {"pipe2", WithErrnoUpdate(::pipe2)},
+        {"ttyname", ::ttyname},
+        {"tcgetpgrp", WithErrnoUpdate(::tcgetpgrp)},
+        {"tcsetpgrp", WithErrnoUpdate(::tcsetpgrp)},
         {"gethostname", WithErrnoUpdate(::gethostname)},
         {"fsync", WithErrnoUpdate(::fsync)},
         {"sync", WithErrnoUpdate(::sync)},
@@ -803,8 +981,12 @@ void shim::add_unistd_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
         {"lockf", WithErrnoUpdate(::lockf)},
         {"swab", ::swab},
         {"pathconf", ::pathconf},
+        {"fpathconf", ::fpathconf},
         {"truncate", ::truncate},
         {"fdatasync", WithErrnoUpdate(fdatasync)},
+        {"posix_fadvise", WithErrnoUpdate(::posix_fadvise)},
+        {"posix_fallocate", WithErrnoUpdate(::posix_fallocate)},
+        {"getpwnam_r", WithErrnoUpdate(::getpwnam_r)},
 
         /* Use our impl or fallback to system */
         {"ftruncate", WithErrnoUpdate(ftruncate)},
@@ -860,7 +1042,14 @@ void shim::add_signal_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
         }},
         {"sigdelset", +[](void *__set, int __signo) -> int {
             return 0;
-        }}
+        }},
+        {"__libc_current_sigrtmin", shim___libc_current_sigrtmin},
+        {"__libc_current_sigrtmax", shim___libc_current_sigrtmax},
+        {"sigaltstack", ::sigaltstack},
+        {"siginterrupt", ::siginterrupt},
+        {"sigismember", ::sigismember},
+        {"sigpending", ::sigpending},
+        {"sigwait", ::sigwait}
     });
 }
 
@@ -869,6 +1058,7 @@ void shim::add_string_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
         /* string.h */
         {"memccpy", ::memccpy},
         {"memchr", (void *(*)(void *, int, size_t)) ::memchr},
+        {"memrchr", (void *(*)(void *, int, size_t)) ::memrchr},
         {"memcmp", (int (*)(const void *, const void *, size_t)) ::memcmp},
         {"memcpy", ::memcpy},
         {"__memcpy_chk", __memcpy_chk},
@@ -945,9 +1135,14 @@ void shim::add_wchar_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
     list.insert(list.end(), {
         /* wchar.h */
         {"wcscat", ::wcscat},
+        {"wcschr", ::wcschr},
         {"wcscpy", ::wcscpy},
         {"wcsncpy", ::wcsncpy},
+        {"wcsncat", ::wcsncat},
         {"wcscmp", ::wcscmp},
+        {"wcsncmp", ::wcsncmp},
+        {"wcsrchr", ::wcsrchr},
+        {"wcstok", ::wcstok},
         {"wcslen", ::wcslen},
         {"wctob", ::wctob},
         {"btowc", ::btowc},
@@ -1030,7 +1225,8 @@ void shim::add_resource_shimmed_symbols(std::vector<shim::shimmed_symbol> &list)
         /* sys/resource.h */
         {"getrusage", WithErrnoUpdate(getrusage)},
         {"getpriority", WithErrnoUpdate(getpriority)},
-        {"getrlimit", WithErrnoUpdate(getrlimit)}
+        {"getrlimit", WithErrnoUpdate(getrlimit)},
+        {"setrlimit", WithErrnoUpdate(shim_setrlimit)}
     });
 }
 
@@ -1076,6 +1272,8 @@ void shim::add_misc_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
         {"openlog", openlog},
         {"closelog", closelog},
         {"syslog", syslog},
+        {"timegm", ::timegm},
+        {"times", ::times},
 #ifndef HAS_ARC4RANDOM_BUF
         {"arc4random", shim::arc4random},
 #else

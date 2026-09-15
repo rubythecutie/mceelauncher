@@ -35,6 +35,8 @@ namespace shim {
 #endif
     };
     int statvfs(const char *path, struct vfs * buf);
+    int fstatvfs(int fd, struct vfs * buf);
+    int fstatvfs64(int fd, struct vfs * buf);
 
     void add_statvfs_shimmed_symbols(std::vector<shimmed_symbol> &list);
 }

@@ -81,6 +81,7 @@ namespace shim {
     int stat(const char *path, bionic::stat *s);
     int fstat(int fd, bionic::stat *s);
     int lstat(const char *path,bionic::stat *s);
+    int fstatat(int dirfd, const char *path, bionic::stat *s, int flags);
 
     void add_stat_shimmed_symbols(std::vector<shimmed_symbol> &list);
 

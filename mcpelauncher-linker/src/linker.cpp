@@ -36,11 +36,16 @@ int linker::unload_library(void* handle) {
 }
 
 size_t linker::get_library_base(void *handle) {
-    return soinfo_from_handle(handle)->base;
+    auto si = soinfo_from_handle(handle);
+    if (!si)
+        return 0;
+    return si->base;
 }
 
 void linker::get_library_code_region(void *handle, size_t &base, size_t &size) {
     auto s = soinfo_from_handle(handle);
+    if (!s)
+        return;
     for (auto i = 0; i < s->phnum; i++) {
         if (s->phdr[i].p_type == PT_LOAD && s->phdr[i].p_flags & PF_X) {
             base = s->base + s->phdr[i].p_vaddr;
@@ -51,6 +56,8 @@ void linker::get_library_code_region(void *handle, size_t &base, size_t &size) {
 
 void linker::relocate(void *handle, const std::unordered_map<std::string, void *> &symbols) {
     auto soinfo = soinfo_from_handle(handle);
+    if (!soinfo)
+        return;
     soinfo->add_symbols(symbols);
 }
 

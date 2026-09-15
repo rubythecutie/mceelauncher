@@ -597,6 +597,11 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
     }
 
     static void* fmod = nullptr;
+    // Clear stale handle if the library was unloaded (e.g. retry path in main.cpp
+    // unloads libfmod while this static still points at it).
+    if (fmod && linker::get_library_base(fmod) == 0) {
+        fmod = nullptr;
+    }
     // Temporary feature flag to disable native fmod patching
     if(!fmod && ReadEnvFlag("MCPELAUNCHER_PATCH_FMOD", true)) {
         fmod = linker::dlopen("libfmod.so", 0);
@@ -618,7 +623,7 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
     // Detect Android Integrity Protection
     void* pairipcore = linker::dlopen("libpairipcore.so", 0);
     if(!pairipcore) {
-        Log::error("MinecraftUtils", "Failed to load libpairipcore: %s", linker::dlerror());
+        Log::info("MinecraftUtils", "libpairipcore not present (optional): %s", linker::dlerror());
     } else {
         Log::info("MinecraftUtils", "Loaded libpairipcore");
     }
@@ -951,6 +956,7 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
         if(fmod) {
             // We cannot load this again, so make it static and unload it once
             linker::dlclose(fmod);
+            fmod = nullptr;
         }
         for(auto&& h : hooks) {
             if(h.name) {
