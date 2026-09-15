@@ -637,7 +637,7 @@ void* MinecraftUtils::loadMinecraftLib(void* showMousePointerCallback, void* hid
     if(bfreeifaddrs) {
         hooks.emplace_back(mcpelauncher_hook_t{"_ZN3rtc11freeifaddrsEP7ifaddrs", bfreeifaddrs});
     }
-    if(ReadEnvFlag("MCPELAUNCHER_DISABLE_TELEMETRY", false)) {
+    if(ReadEnvFlag("MCPELAUNCHER_DISABLE_TELEMETRY", false) || !pairipcore) {
         hooks.emplace_back(mcpelauncher_hook_t{"_ZN9Microsoft12Applications6Events19TelemetrySystemBase5startEv", (void*)+[]() {
             Log::error("MinecraftUtils", "TelemetrySystemBase::start");
         }});
