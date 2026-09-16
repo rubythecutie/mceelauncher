@@ -735,7 +735,9 @@ void shim::add_stdlib_shimmed_symbols(std::vector<shim::shimmed_symbol> &list) {
         {"mkstemp", WithErrnoUpdate(::mkstemp)},
         {"mkstemps", WithErrnoUpdate(::mkstemps)},
         {"mkdtemp", WithErrnoUpdate(::mkdtemp)},
-        {"mktemp", WithErrnoUpdate(::mktemp)}
+        {"mktemp", WithErrnoUpdate(::mktemp)},
+
+        {"ldiv", ldiv}
     });
 }
 
