@@ -1,6 +1,8 @@
 #include <log.h>
 #include <mcpelauncher/path_helper.h>
 #include <mcpelauncher/linker.h>
+#include <mcpelauncher/minecraft_version.h>
+#include "../util.h"
 #include "jni_support.h"
 #include "xbox_live.h"
 #include "fmod.h"
@@ -19,6 +21,9 @@
 #include "sdl3audio.h"
 #endif
 #include "accounts.h"
+#include "active_directory_signin.h"
+#include "minecraft_webview.h"
+#include "android_system.h"
 #ifndef NO_OPENSSL
 #include "ecdsa.h"
 #endif
@@ -126,6 +131,10 @@ void JniSupport::registerJniClasses() {
     vm.registerClass<AudioDevice>();
 #endif
     vm.registerClass<AndroidJniHelperMultiplayer>();
+    vm.registerClass<ActiveDirectorySignIn>();
+    vm.registerClass<MinecraftWebview>();
+    vm.registerClass<System>();
+    vm.registerClass<AndroidBuild>();
 }
 
 void JniSupport::registerMinecraftNatives(void* (*symResolver)(const char*)) {
@@ -163,6 +172,16 @@ void JniSupport::registerMinecraftNatives(void* (*symResolver)(const char*)) {
                     symResolver);
     registerNatives(PlayIntegrity::getDescriptor(), {
                                                         {"nativePlayIntegrityComplete", "()V"},
+                                                    },
+                    symResolver);
+    registerNatives(ActiveDirectorySignIn::getDescriptor(), {
+                                                        {"nativeOnDataChanged", "()V"},
+                                                        {"nativeOnSignOutCallback", "()V"},
+                                                    },
+                    symResolver);
+    registerNatives(MinecraftWebview::getDescriptor(), {
+                                                        {"nativeSendToHost", "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"},
+                                                        {"nativeOnWebError", "(IILjava/lang/String;)V"},
                                                     },
                     symResolver);
 }
@@ -208,7 +227,7 @@ void JniSupport::registerNatives(std::shared_ptr<FakeJni::JClass const> clazz,
         auto cppSymName = std::string("Java_") + cppClassName + "_" + ent.name;
         auto cppSym = symResolver(cppSymName.c_str());
         if(cppSym == nullptr) {
-            Log::error("JniSupport", "Missing native symbol: %s", cppSymName.c_str());
+            Log::warn("JniSupport", "Missing native symbol: %s", cppSymName.c_str());
             continue;
         }
 
@@ -262,10 +281,61 @@ void JniSupport::startGame(ANativeActivity_createFunc* activityOnCreate, GameAct
         activityOnCreate(&nativeActivity, nullptr, 0);
 
         Log::trace("JniSupport", "Invoking start activity callbacks\n");
-        nativeActivityCallbacks.onInputQueueCreated(&nativeActivity, inputQueue);
-        nativeActivityCallbacks.onStart(&nativeActivity);
-        nativeActivityCallbacks.onNativeWindowCreated(&nativeActivity, window);
+        bool wantResume = ReadEnvFlag("MCPELAUNCHER_CALL_ONRESUME", false);
+        if(!wantResume) {
+            wantResume = (MinecraftVersion::package == "com.mojang.minecraftedu");
+        }
+        if(!wantResume) {
+            std::string maesdkPath;
+            try {
+                maesdkPath = PathHelper::findGameFile(std::string("lib/") + PathHelper::getAbiDir() + "/libmaesdk.so");
+            } catch(...) {
+                maesdkPath.clear();
+            }
+            if(!maesdkPath.empty() && PathHelper::fileExists(maesdkPath))
+                wantResume = true;
+        }
         // nativeActivityCallbacks.onResume(&nativeActivity);
+        if(wantResume) {
+            if(nativeActivityCallbacks.onInputQueueCreated)
+                nativeActivityCallbacks.onInputQueueCreated(&nativeActivity, inputQueue);
+            if(nativeActivityCallbacks.onStart)
+                nativeActivityCallbacks.onStart(&nativeActivity);
+            if(nativeActivityCallbacks.onResume) {
+                Log::info("JniSupport", "Invoking onResume (Education/mcpelauncher workaround)");
+                nativeActivityCallbacks.onResume(&nativeActivity);
+            }
+            if(nativeActivityCallbacks.onNativeWindowCreated)
+                nativeActivityCallbacks.onNativeWindowCreated(&nativeActivity, window);
+            if(nativeActivityCallbacks.onContentRectChanged) {
+                ARect rect{0, 0, 720, 480};
+                if(window != nullptr) {
+                    int ww = 720, wh = 480;
+                    (void)ww; (void)wh;
+                }
+                Log::info("JniSupport", "Invoking onContentRectChanged (Education workaround)");
+                nativeActivityCallbacks.onContentRectChanged(&nativeActivity, &rect);
+            }
+            if(nativeActivityCallbacks.onWindowFocusChanged) {
+                Log::info("JniSupport", "Invoking onWindowFocusChanged(1) (Education workaround)");
+                nativeActivityCallbacks.onWindowFocusChanged(&nativeActivity, 1);
+            }
+            if(nativeActivityCallbacks.onNativeWindowRedrawNeeded) {
+                Log::info("JniSupport", "Invoking onNativeWindowRedrawNeeded (Education workaround)");
+                nativeActivityCallbacks.onNativeWindowRedrawNeeded(&nativeActivity, window);
+            }
+            if(nativeActivityCallbacks.onConfigurationChanged) {
+                Log::info("JniSupport", "Invoking onConfigurationChanged (Education workaround)");
+                nativeActivityCallbacks.onConfigurationChanged(&nativeActivity);
+            }
+        } else {
+            if(nativeActivityCallbacks.onInputQueueCreated)
+                nativeActivityCallbacks.onInputQueueCreated(&nativeActivity, inputQueue);
+            if(nativeActivityCallbacks.onStart)
+                nativeActivityCallbacks.onStart(&nativeActivity);
+            if(nativeActivityCallbacks.onNativeWindowCreated)
+                nativeActivityCallbacks.onNativeWindowCreated(&nativeActivity, window);
+        }
     } else {
         gameActivity.callbacks = &gameActivityCallbacks;
         gameActivity.vm = (JavaVM*)&vm;

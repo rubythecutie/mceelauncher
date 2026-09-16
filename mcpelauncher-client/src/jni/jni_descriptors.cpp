@@ -15,6 +15,9 @@
 #endif
 #include "java_types.h"
 #include "accounts.h"
+#include "active_directory_signin.h"
+#include "minecraft_webview.h"
+#include "android_system.h"
 #ifndef NO_OPENSSL
 #include "ecdsa.h"
 #endif
@@ -379,4 +382,54 @@ BEGIN_NATIVE_DESCRIPTOR(AndroidJniHelperMultiplayer){Function<&AndroidJniHelperM
     END_NATIVE_DESCRIPTOR
 
 BEGIN_NATIVE_DESCRIPTOR(EventTracerHelperMultiplayer){Function<&EventTracerHelperMultiplayer::getPlayFabEventCommonFields>{}, "getPlayFabEventCommonFields"},
+    END_NATIVE_DESCRIPTOR
+
+    BEGIN_NATIVE_DESCRIPTOR(ActiveDirectorySignIn){Constructor<ActiveDirectorySignIn>{}},
+    {Function<&ActiveDirectorySignIn::createActiveDirectorySignIn>{}, "createActiveDirectorySignIn"},
+    {Function<&ActiveDirectorySignIn::authenticate>{}, "authenticate"},
+    {Function<&ActiveDirectorySignIn::silentSignin>{}, "silentSignin"},
+    {Function<&ActiveDirectorySignIn::signOut>{}, "signOut"},
+    {Function<&ActiveDirectorySignIn::clearCookies>{}, "clearCookies"},
+    {Function<&ActiveDirectorySignIn::getAccessToken>{}, "getAccessToken"},
+    {Function<&ActiveDirectorySignIn::getExpiresOn>{}, "getExpiresOn"},
+    {Function<&ActiveDirectorySignIn::getUserHint>{}, "getUserHint"},
+    {Function<&ActiveDirectorySignIn::getCancelled>{}, "getCancelled"},
+    {Function<&ActiveDirectorySignIn::hasError>{}, "hasError"},
+    {Function<&ActiveDirectorySignIn::getErrorString>{}, "getErrorString"},
+    {Function<&ActiveDirectorySignIn::getErrorStatus>{}, "getErrorStatus"},
+    {Function<&ActiveDirectorySignIn::getErrorSubStatus>{}, "getErrorSubStatus"},
+    {Function<&ActiveDirectorySignIn::getSignOutError>{}, "getSignOutError"},
+    {Function<&ActiveDirectorySignIn::onActivityResult>{}, "onActivityResult"},
+    {Function<&ActiveDirectorySignIn::onDestroy>{}, "onDestroy"},
+    {Function<&ActiveDirectorySignIn::onResume>{}, "onResume"},
+    {Function<&ActiveDirectorySignIn::onStop>{}, "onStop"},
+    END_NATIVE_DESCRIPTOR
+
+    BEGIN_NATIVE_DESCRIPTOR(MinecraftWebview){Constructor<MinecraftWebview, FakeJni::JInt>{}},
+    {Function<&MinecraftWebview::setUrl>{}, "setUrl"},
+    {Function<&MinecraftWebview::setRect>{}, "setRect"},
+    {Function<&MinecraftWebview::setShowView>{}, "setShowView"},
+    {Function<&MinecraftWebview::setPropagatedAlpha>{}, "setPropagatedAlpha"},
+    {Function<&MinecraftWebview::sendToWebView>{}, "sendToWebView"},
+    {Function<&MinecraftWebview::teardown>{}, "teardown"},
+    {Function<&MinecraftWebview::sendToHost>{}, "sendToHost"},
+    {Function<&MinecraftWebview::onWebError>{}, "onWebError"},
+    END_NATIVE_DESCRIPTOR
+
+    BEGIN_NATIVE_DESCRIPTOR(System){Function<&System::getProperty>{}, "getProperty"},
+    {Function<&System::getProperty2>{}, "getProperty"},
+    {Function<&System::currentTimeMillis>{}, "currentTimeMillis"},
+    {Function<&System::nanoTime>{}, "nanoTime"},
+    END_NATIVE_DESCRIPTOR
+
+    BEGIN_NATIVE_DESCRIPTOR(AndroidBuild){Field<&AndroidBuild::MODEL>{}, "MODEL"},
+    {Field<&AndroidBuild::MANUFACTURER>{}, "MANUFACTURER"},
+    {Field<&AndroidBuild::BRAND>{}, "BRAND"},
+    {Field<&AndroidBuild::DEVICE>{}, "DEVICE"},
+    {Field<&AndroidBuild::DISPLAY>{}, "DISPLAY"},
+    {Field<&AndroidBuild::ID>{}, "ID"},
+    {Field<&AndroidBuild::PRODUCT>{}, "PRODUCT"},
+    {Field<&AndroidBuild::HARDWARE>{}, "HARDWARE"},
+    {Field<&AndroidBuild::USER>{}, "USER"},
+    {Field<&AndroidBuild::TYPE>{}, "TYPE"},
     END_NATIVE_DESCRIPTOR

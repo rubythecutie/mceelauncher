@@ -1,19 +1,20 @@
-#include <QtCore/QUrl>
-#include <QtCore/QCommandLineParser>
-#include <QGuiApplication>
+#include <QApplication>
+#include <QCommandLineParser>
 #include <QScreen>
-#include <QQmlApplicationEngine>
-#include <QtQml/QQmlContext>
-#if QT_VERSION >= 0x50C00
+#include <QTimer>
+#include <QUrl>
+#include <QWebEnginePage>
+#include <QWebEngineProfile>
+#include <QWebEngineUrlRequestJob>
+#include <QWebEngineView>
+#if QT_VERSION >= 0x050C00
 #include <QWebEngineUrlScheme>
 #endif
-#include <QWebEngineUrlRequestJob>
-#include <QWebEngineProfile>
 #include <iostream>
 #include "main.h"
 
 int main(int argc, char *argv[]) {
-    QGuiApplication app(argc, argv);
+    QApplication app(argc, argv);
 
     QCommandLineParser parser;
     parser.addHelpOption();
@@ -23,42 +24,128 @@ int main(int argc, char *argv[]) {
     if (parser.positionalArguments().size() != 2) {
         return -1;
     }
-    auto startUrl = QUrl::fromUserInput(parser.positionalArguments()[0]);
-    auto endUrl = QUrl::fromUserInput(parser.positionalArguments()[1]);
+    QUrl startUrl = QUrl::fromUserInput(parser.positionalArguments()[0]);
+    QString endUrlStr = parser.positionalArguments()[1];
+    QString endScheme = QUrl::fromUserInput(parser.positionalArguments()[1]).scheme();
 
-    auto scheme = endUrl.scheme().toStdString();
-#if QT_VERSION >= 0x50C00
-    QWebEngineUrlScheme::registerScheme(QWebEngineUrlScheme(scheme.c_str()));
+    QWebEngineView view;
+    QWebEngineProfile profile;
+    profile.setPersistentCookiesPolicy(QWebEngineProfile::NoPersistentCookies);
+    profile.setHttpCacheType(QWebEngineProfile::NoCache);
+
+    SchemeHandler* handler = nullptr;
+    if(endScheme != "http" && endScheme != "https") {
+#if QT_VERSION >= 0x050C00
+        QWebEngineUrlScheme::registerScheme(QWebEngineUrlScheme(endScheme.toUtf8()));
 #endif
-    SchemeHandler handler(endUrl.toString());
-    QWebEngineProfile::defaultProfile()->installUrlSchemeHandler(scheme.c_str(), &handler);
+        handler = new SchemeHandler(endUrlStr);
+        profile.installUrlSchemeHandler(endScheme.toUtf8(), handler);
+    }
 
-    QQmlApplicationEngine engine;
-    QQmlContext *context = engine.rootContext();
-    context->setContextProperty(QStringLiteral("startUrl"), startUrl);
+    InterceptPage page(&profile, endUrlStr, &view);
+    view.setPage(&page);
     QRect geometry = QGuiApplication::primaryScreen()->availableGeometry();
     const QSize size = geometry.size() * 4 / 5;
     const QSize offset = (geometry.size() - size) / 2;
     const QPoint pos = geometry.topLeft() + QPoint(offset.width(), offset.height());
-    geometry = QRect(pos, size);
+    view.setGeometry(QRect(pos, size));
 
-    context->setContextProperty(QStringLiteral("initialX"), geometry.x());
-    context->setContextProperty(QStringLiteral("initialY"), geometry.y());
-    context->setContextProperty(QStringLiteral("initialWidth"), geometry.width());
-    context->setContextProperty(QStringLiteral("initialHeight"), geometry.height());
+    QObject::connect(&view, &QWebEngineView::titleChanged, &view, &QWidget::setWindowTitle);
+    QObject::connect(&view, &QWebEngineView::urlChanged, [&](const QUrl &url) {
+        if(InterceptPage::matchesEndUrl(url, endUrlStr)) {
+            std::cout << url.toString(QUrl::FullyEncoded).toStdString() << std::endl << std::flush;
+            QTimer::singleShot(0, &app, &QCoreApplication::quit);
+        } else if(InterceptPage::isWrongPlace(url)) {
+            std::cerr << "[webview] reached wrongplace without capturing code URL; "
+                         "staying open (close window to cancel)" << std::endl << std::flush;
+        }
+    });
 
-    engine.load(QUrl(QStringLiteral("qrc:/main.qml")));
-    if (engine.rootObjects().isEmpty())
-        return -1;
-
-    return app.exec();
-
+    view.setUrl(startUrl);
+    view.show();
+    int rc = app.exec();
+    if(handler) {
+        profile.removeUrlSchemeHandler(handler);
+        delete handler;
+    }
+    return rc;
 }
 
 void SchemeHandler::requestStarted(QWebEngineUrlRequestJob *request) {
-    auto url = request->requestUrl().toString();
-    if (url.startsWith(endUrl)) {
-        std::cout << url.toStdString() << std::endl;
-        qApp->quit();
+    QUrl url = request->requestUrl();
+    if (InterceptPage::matchesEndUrl(url, endUrl)) {
+        std::cout << url.toString(QUrl::FullyEncoded).toStdString() << std::endl << std::flush;
+        QTimer::singleShot(0, qApp, &QCoreApplication::quit);
+    } else {
+        request->fail(QWebEngineUrlRequestJob::UrlNotFound);
     }
+}
+
+static QString stripTrailingSlashes(QString s) {
+    while (s.endsWith('/') && s.size() > 1)
+        s.chop(1);
+    return s;
+}
+
+InterceptPage::InterceptPage(QWebEngineProfile *profile, QString endUrlStr, QObject *parent)
+    : QWebEnginePage(profile, parent), endUrlStr(std::move(endUrlStr)) {}
+
+bool InterceptPage::isWrongPlace(const QUrl &url) {
+    if (url.host().compare("login.microsoftonline.com", Qt::CaseInsensitive) != 0 &&
+        url.host().compare("login.microsoft.com", Qt::CaseInsensitive) != 0 &&
+        url.host().compare("login.live.com", Qt::CaseInsensitive) != 0)
+        return false;
+    return url.path(QUrl::FullyEncoded).contains("wrongplace", Qt::CaseSensitive);
+}
+
+bool InterceptPage::matchesEndUrl(const QUrl &url, const QString &endUrlStr) {
+    if (endUrlStr.isEmpty() || !url.isValid())
+        return false;
+    QString full = url.toString(QUrl::FullyEncoded);
+    if (full.startsWith(endUrlStr))
+        return true;
+    QString endTrim = stripTrailingSlashes(endUrlStr);
+    if (full.startsWith(endTrim)) {
+        if (full.size() == endTrim.size())
+            return true;
+        QChar c = full.at(endTrim.size());
+        if (c == '?' || c == '#' || c == '/' || c == '&')
+            return true;
+    }
+    QUrl endUrl = QUrl::fromUserInput(endTrim);
+    if (!endUrl.isValid())
+        return false;
+    if (url.scheme().compare(endUrl.scheme(), Qt::CaseInsensitive) != 0)
+        return false;
+    if (url.host().compare(endUrl.host(), Qt::CaseInsensitive) != 0)
+        return false;
+    if (url.port() != endUrl.port())
+        return false;
+    QString p1 = stripTrailingSlashes(url.path(QUrl::FullyEncoded));
+    QString p2 = stripTrailingSlashes(endUrl.path(QUrl::FullyEncoded));
+    if (p1 != p2)
+        return false;
+    return true;
+}
+
+bool InterceptPage::acceptNavigationRequest(const QUrl &url, NavigationType type, bool isMainFrame) {
+    Q_UNUSED(type);
+    if (!isMainFrame)
+        return true;
+    if (checkAndHandle(url))
+        return false;
+    if (isWrongPlace(url)) {
+        std::cerr << "[webview] blocking navigation to wrongplace: "
+                  << url.toString(QUrl::FullyEncoded).toStdString() << std::endl << std::flush;
+        return false;
+    }
+    return true;
+}
+
+bool InterceptPage::checkAndHandle(const QUrl &url) {
+    if (!matchesEndUrl(url, endUrlStr))
+        return false;
+    std::cout << url.toString(QUrl::FullyEncoded).toStdString() << std::endl << std::flush;
+    QTimer::singleShot(0, qApp, &QCoreApplication::quit);
+    return true;
 }

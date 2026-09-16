@@ -3,6 +3,58 @@
 #include <log.h>
 #include <curl/curl.h>
 #include <thread>
+#include <mutex>
+#include <unordered_map>
+
+namespace {
+std::mutex gEduUrlMutex;
+std::unordered_map<long long, std::string> gEduCallUrls;
+std::mutex gEduBodyMutex;
+std::unordered_map<long long, std::string> gEduReqBodies;
+
+void trackEduCall(long long handle, const std::string& url) {
+    if(url.find("minecrafteduservices") == std::string::npos &&
+       url.find("meeservices") == std::string::npos)
+        return;
+    std::lock_guard<std::mutex> l(gEduUrlMutex);
+    gEduCallUrls[handle] = url;
+}
+std::string eduUrlFor(long long handle) {
+    std::lock_guard<std::mutex> l(gEduUrlMutex);
+    auto it = gEduCallUrls.find(handle);
+    return it == gEduCallUrls.end() ? std::string() : it->second;
+}
+void appendEduReqBody(long long handle, const char* data, size_t n) {
+    std::lock_guard<std::mutex> l(gEduBodyMutex);
+    auto& s = gEduReqBodies[handle];
+    if(s.size() < 20000)
+        s.append(data, n);
+}
+std::mutex gEduCarryMutex;
+std::unordered_map<long long, std::string> gEduCarry;
+
+std::string patchEduBody(const std::string& in, bool& changed) {
+    std::string out = in;
+    changed = false;
+    const char* from1 = "\"osVersion\":\"\"";
+    const char* to1 = "\"osVersion\":\"12\"";
+    size_t pos = 0;
+    while((pos = out.find(from1, pos)) != std::string::npos) {
+        out.replace(pos, strlen(from1), to1);
+        pos += strlen(to1);
+        changed = true;
+    }
+    const char* from2 = "\"platform\":\"Linux()\"";
+    const char* to2 = "\"platform\":\"Linux(12)\"";
+    pos = 0;
+    while((pos = out.find(from2, pos)) != std::string::npos) {
+        out.replace(pos, strlen(from2), to2);
+        pos += strlen(to2);
+        changed = true;
+    }
+    return out;
+}
+}
 
 using namespace std::placeholders;
 
@@ -43,6 +95,7 @@ void HttpClientRequest::setHttpUrl(std::shared_ptr<FakeJni::JString> url) {
 #ifndef NDEBUG
     Log::trace("HttpClient", "URL: %s", url->asStdString().c_str());
 #endif
+    this->url = url->asStdString();
     curl_easy_setopt(curl, CURLOPT_URL, url->asStdString().c_str());
 }
 
@@ -104,10 +157,19 @@ void HttpClientRequest::setHttpMethodAndBody2(std::shared_ptr<FakeJni::JString> 
         this->inputStream = std::make_shared<NativeInputStream>(callHandle);
         curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
         curl_easy_setopt(curl, CURLOPT_READDATA, this->inputStream.get());
-        if (this->method == "POST") {
-            curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t) contentLength);
-        } else if (this->method == "PUT") {
-            curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, (curl_off_t) contentLength);
+        bool isEdu = this->url.find("minecrafteduservices") != std::string::npos;
+        if(isEdu) {
+            if (this->method == "POST") {
+                curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)-1);
+            } else if (this->method == "PUT") {
+                curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, (curl_off_t)-1);
+            }
+        } else {
+            if (this->method == "POST") {
+                curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t) contentLength);
+            } else if (this->method == "PUT") {
+                curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, (curl_off_t) contentLength);
+            }
         }
 #ifndef NDEBUG
         Log::trace("HttpClient", "setHttpMethodAndBody2 called, sent request");
@@ -121,8 +183,13 @@ void HttpClientRequest::setHttpMethodAndBody2(std::shared_ptr<FakeJni::JString> 
         Log::trace("HttpClient", "setHttpMethodAndBody2 called, method: %s", this->method.c_str());
 #endif
     }
-    header = curl_slist_append(header, ("Content-Length: " + std::to_string(contentLength)).c_str());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, header);
+    bool isEduLen = this->url.find("minecrafteduservices") != std::string::npos;
+    if(!isEduLen) {
+        header = curl_slist_append(header, ("Content-Length: " + std::to_string(contentLength)).c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, header);
+    } else {
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, header);
+    }
     auto conttype = contentType->asStdString();
     if(conttype.length() && !slist_contains(header, ("Content-Type: " + conttype).c_str())) {
         header = curl_slist_append(header, ("Content-Type: " + conttype).c_str());
@@ -140,6 +207,57 @@ void HttpClientRequest::setHttpHeader(std::shared_ptr<FakeJni::JString> name, st
 
 void HttpClientRequest::doRequestAsync(FakeJni::JLong sourceCall) {
     call_handle = sourceCall;
+    trackEduCall((long long)sourceCall, this->url);
+    if(!this->body.empty() && !this->url.empty() &&
+       (this->url.find("minecrafteduservices") != std::string::npos)) {
+        std::string s(this->body.data(), this->body.size());
+        bool changed = false;
+        std::string patched = patchEduBody(s, changed);
+        if(changed) {
+            this->body.assign(patched.data(), patched.data() + patched.size());
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, this->body.data());
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, this->body.size());
+        }
+    }
+    if(this->inputStream && !this->url.empty() &&
+       (this->url.find("minecrafteduservices") != std::string::npos) &&
+       (this->method == "POST" || this->method == "PUT")) {
+        std::string full;
+        char tmp[16384];
+        for(int guard = 0; guard < 64; ++guard) {
+            size_t n = this->inputStream->Read(tmp, sizeof(tmp));
+            if(n == 0 || n == (size_t)-1)
+                break;
+            if(full.size() + n > 4 * 1024 * 1024)
+                break;
+            full.append(tmp, n);
+            if(n < sizeof(tmp))
+                break;
+        }
+        {
+            char tail[256];
+            size_t n = this->inputStream->Read(tail, sizeof(tail));
+            if(n != 0 && n != (size_t)-1)
+                full.append(tail, n);
+        }
+        bool changed = false;
+        std::string patched = patchEduBody(full, changed);
+        this->body.assign(patched.data(), patched.data() + patched.size());
+        this->inputStream.reset();
+        curl_easy_setopt(curl, CURLOPT_READFUNCTION, NULL);
+        curl_easy_setopt(curl, CURLOPT_READDATA, NULL);
+        if(this->method == "POST") {
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, this->body.data());
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, this->body.size());
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)this->body.size());
+        } else {
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, this->body.data());
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, this->body.size());
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)this->body.size());
+        }
+        header = curl_slist_append(header, ("Content-Length: " + std::to_string(this->body.size())).c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, header);
+    }
     auto me = this->weak_from_this();
     FakeJni::LocalFrame frame;
     auto&& jvm = &frame.getJniEnv().getVM();
@@ -269,13 +387,59 @@ NativeInputStream::NativeInputStream(FakeJni::JLong call_handle) : call_handle(c
 }
 
 size_t NativeInputStream::Read(void *buffer, size_t size) {
+    {
+        std::lock_guard<std::mutex> l(gEduCarryMutex);
+        auto it = gEduCarry.find((long long)call_handle);
+        if(it != gEduCarry.end() && !it->second.empty()) {
+            size_t n = std::min(size, it->second.size());
+            memcpy(buffer, it->second.data(), n);
+            it->second.erase(0, n);
+            if(it->second.empty())
+                gEduCarry.erase(it);
+            offset += n;
+            return n;
+        }
+    }
     FakeJni::LocalFrame frame;
     auto method = getClass().getMethod("(JJ[BJJ)I", "nativeRead");
     auto buf = std::make_shared<FakeJni::JByteArray>((size_t)std::numeric_limits<jsize>::max() < size ? std::numeric_limits<jsize>::max() : (jsize)size);
     jvalue ret = method->invoke(frame.getJniEnv(), this, call_handle, offset, frame.getJniEnv().createLocalReference(buf), (FakeJni::JLong)0, (FakeJni::JLong)buf->getSize());
     if(ret.i != -1) {
-        memcpy(buffer, buf->getArray(), ret.i);
-        offset += ret.i;
+        std::string u = eduUrlFor((long long)call_handle);
+        std::string data((const char*)buf->getArray(), (size_t)ret.i);
+        if(!u.empty() && ret.i > 0) {
+            appendEduReqBody((long long)call_handle, data.data(), data.size());
+            bool changed = false;
+            std::string patched = patchEduBody(data, changed);
+            if(changed) {
+                data.swap(patched);
+            }
+        }
+        if(data.size() > size) {
+            memcpy(buffer, data.data(), size);
+            {
+                std::lock_guard<std::mutex> l(gEduCarryMutex);
+                gEduCarry[(long long)call_handle] = data.substr(size);
+            }
+            offset += size;
+            return size;
+        }
+        memcpy(buffer, data.data(), data.size());
+        offset += data.size();
+        return data.size();
+    }
+    {
+        std::lock_guard<std::mutex> l(gEduCarryMutex);
+        auto it = gEduCarry.find((long long)call_handle);
+        if(it != gEduCarry.end() && !it->second.empty()) {
+            size_t n = std::min(size, it->second.size());
+            memcpy(buffer, it->second.data(), n);
+            it->second.erase(0, n);
+            if(it->second.empty())
+                gEduCarry.erase(it);
+            offset += n;
+            return n;
+        }
     }
     return ret.i;
 }
@@ -284,6 +448,10 @@ NativeOutputStream::NativeOutputStream(FakeJni::JLong call_handle) : call_handle
 }
 
 void NativeOutputStream::WriteAll(std::shared_ptr<FakeJni::JByteArray> data) {
+    std::string u = eduUrlFor((long long)call_handle);
+    if(!u.empty() && data && data->getSize() > 0) {
+        std::string s((const char*)data->getArray(), (size_t)data->getSize());
+    }
     FakeJni::LocalFrame frame;
     auto method = getClass().getMethod("(J[BII)V", "nativeWrite");
     method->invoke(frame.getJniEnv(), this, call_handle, frame.getJniEnv().createLocalReference(data), (FakeJni::JInt)0, (FakeJni::JInt)data->getSize());

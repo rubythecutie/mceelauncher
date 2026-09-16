@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <game_window_manager.h>
 #include "util.h"
+#include <poll.h>
 
 std::string XalWebViewQt::findWebView() {
     std::string path;
@@ -60,11 +61,66 @@ std::string XalWebViewQt::exec_get_stdout(std::string path, std::string title, s
 
         std::string outputStdOut;
         std::string outputStdErr;
-        ssize_t r;
-        if((r = read(pipes[PIPE_STDOUT][PIPE_READ], ret, 1024)) > 0)
-            outputStdOut += std::string(ret, (size_t)r);
-        if((r = read(pipes[PIPE_STDERR][PIPE_READ], ret, 1024)) > 0)
-            outputStdErr += std::string(ret, (size_t)r);
+        int outFd = pipes[PIPE_STDOUT][PIPE_READ];
+        int errFd = pipes[PIPE_STDERR][PIPE_READ];
+        bool outOpen = true, errOpen = true;
+        char ret[4096];
+        while(outOpen || errOpen) {
+            struct pollfd fds[2];
+            int nfds = 0;
+            if(outOpen) {
+                fds[nfds].fd = outFd;
+                fds[nfds].events = POLLIN;
+                nfds++;
+            }
+            if(errOpen) {
+                fds[nfds].fd = errFd;
+                fds[nfds].events = POLLIN;
+                nfds++;
+            }
+            int pr = poll(fds, nfds, -1);
+            if(pr < 0) {
+                if(errno == EINTR)
+                    continue;
+                break;
+            }
+            int idx = 0;
+            if(outOpen) {
+                bool hup = (fds[idx].revents & (POLLHUP | POLLERR | POLLNVAL)) != 0;
+                if(fds[idx].revents & POLLIN) {
+                    ssize_t r = read(outFd, ret, sizeof(ret));
+                    if(r > 0) {
+                        outputStdOut += std::string(ret, (size_t)r);
+                    } else {
+                        outOpen = false;
+                    }
+                } else if(hup) {
+                    ssize_t r = read(outFd, ret, sizeof(ret));
+                    if(r > 0)
+                        outputStdOut += std::string(ret, (size_t)r);
+                    else
+                        outOpen = false;
+                }
+                idx++;
+            }
+            if(errOpen) {
+                bool hup = (fds[idx].revents & (POLLHUP | POLLERR | POLLNVAL)) != 0;
+                if(fds[idx].revents & POLLIN) {
+                    ssize_t r = read(errFd, ret, sizeof(ret));
+                    if(r > 0) {
+                        outputStdErr += std::string(ret, (size_t)r);
+                    } else {
+                        errOpen = false;
+                    }
+                } else if(hup) {
+                    ssize_t r = read(errFd, ret, sizeof(ret));
+                    if(r > 0)
+                        outputStdErr += std::string(ret, (size_t)r);
+                    else
+                        errOpen = false;
+                }
+            }
+        }
 
         close(pipes[PIPE_STDOUT][PIPE_READ]);
         close(pipes[PIPE_STDERR][PIPE_READ]);
