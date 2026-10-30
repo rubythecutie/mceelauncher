@@ -75,7 +75,7 @@ void FakeLooper::initializeWindow() {
 #endif
 
     Log::info("Launcher", "Creating window");
-    associatedWindow = GameWindowManager::getManager()->createWindow("Minecraft",
+    associatedWindow = GameWindowManager::getManager()->createWindow("Minecraft Education",
                                                                      options.windowWidth, options.windowHeight, options.graphicsApi);
     FakeEGL::setupGLOverrides();
 }

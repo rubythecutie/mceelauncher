@@ -803,7 +803,7 @@ void ImGuiUIDrawFrame(GameWindow* window) {
     }
     if(show_about) {
         if(ImGui::Begin("About", &show_about)) {
-            ImGui::Text("mcpelauncher-client %s / manifest %s\n", CLIENT_GIT_COMMIT_HASH, MANIFEST_GIT_COMMIT_HASH);
+            ImGui::Text("mceelauncher %s\n", CLIENT_GIT_COMMIT_HASH);
 #if defined(__linux__)
 #define TARGET "Linux"
 #elif defined(__APPLE__)

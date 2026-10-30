@@ -10,7 +10,7 @@
 #include <mach-o/dyld.h>
 #endif
 
-std::string const PathHelper::appDirName = "mcpelauncher";
+std::string const PathHelper::appDirName = "mceelauncher";
 PathHelper::PathInfo PathHelper::pathInfo;
 
 PathHelper::PathInfo::PathInfo() {

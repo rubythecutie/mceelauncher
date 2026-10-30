@@ -204,7 +204,7 @@ int main(int argc, char* argv[]) {
     if(!cacheDir.get().empty())
         PathHelper::setCacheDir(cacheDir);
 
-    Log::info("Launcher", "Version: client %s / manifest %s", CLIENT_GIT_COMMIT_HASH, MANIFEST_GIT_COMMIT_HASH);
+    Log::info("Launcher", "Version: client %s", CLIENT_GIT_COMMIT_HASH);
 #if defined(__linux__)
 #define TARGET "Linux"
 #elif defined(__APPLE__)
